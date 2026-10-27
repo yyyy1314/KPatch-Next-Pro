@@ -9,7 +9,7 @@ LD = $(TARGET_COMPILE)ld
 AS = $(TARGET_COMPILE)as
 OBJCOPY = $(TARGET_COMPILE)objcopy
 
-CFLAGS += -Wall -fno-builtin -std=gnu11 -nostdinc -mgeneral-regs-only
+CFLAGS += -Wall -fno-builtin -std=gnu11 -nostdinc -mgeneral-regs-only -ffixed-x18 -fno-stack-protector -fno-pie
 CFLAGS += -g
 
 ifdef DEBUG
@@ -27,6 +27,9 @@ BASE_SRCS += base/map.c
 BASE_SRCS += base/map1.S 
 BASE_SRCS += base/hook.c 
 BASE_SRCS += base/fphook.c 
+BASE_SRCS += base/hotpatch.c
+BASE_SRCS += base/puff/puff.c
+BASE_SRCS += base/puff/setjmp_aarch64.S
 BASE_SRCS += base/hmem.c 
 BASE_SRCS += base/predata.c 
 BASE_SRCS += base/symbol.c 
@@ -54,6 +57,9 @@ ${TARGET}.elf: ${OBJS}
 
 %.o: %.c
 	${CC} $(CFLAGS) $(INCLUDE) -c -O2 -o $@ $<
+
+base/puff/puff.o: base/puff/puff.c
+	${CC} $(CFLAGS) $(INCLUDE) -c -O2 -DINFLATE_ALLOW_INVALID_DISTANCE_TOOFAR_ARRR -o $@ $<
 
 base/sha256.o: base/sha256.c
 	${CC} $(CFLAGS) $(INCLUDE) -c -O0 -o $@ $<

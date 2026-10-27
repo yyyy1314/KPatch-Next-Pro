@@ -3,7 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/rculist.h>
 #include <linux/slab.h>
-#include <linux/spinlock.h>
+#include <kp_spinlock.h>
 #include <linux/list.h>
 #include <compiler.h>
 #include <stdbool.h>
@@ -18,12 +18,50 @@
 
 #define KSTRORAGE_MAX_GROUP_NUM 4
 
+/* Bumped on every successful write/remove so readers can memoise lookups and
+ * still observe list changes (see is_su_allow_uid). */
+static volatile u32 kstorage_gen = 1;
+
+static inline void kstorage_gen_bump(void)
+{
+#if defined(__aarch64__)
+    /* GCC's outline atomics would call __aarch64_ldadd4_relax, which the
+     * freestanding kpimg link (-nostdlib, no libgcc) cannot resolve. Use the
+     * LL/SC pair, which every arm64 CPU implements. */
+    uint32_t old, tmp;
+    asm volatile("1: ldxr  %w0, [%2]\n"
+                 "   add   %w0, %w0, #1\n"
+                 "   stxr  %w1, %w0, [%2]\n"
+                 "   cbnz  %w1, 1b\n"
+                 : "=&r"(old), "=&r"(tmp)
+                 : "r"(&kstorage_gen)
+                 : "memory");
+#else
+    __atomic_add_fetch(&kstorage_gen, 1, __ATOMIC_RELAXED);
+#endif
+}
+
+u32 kstorage_generation(void)
+{
+    return __atomic_load_n(&kstorage_gen, __ATOMIC_RELAXED);
+}
+KP_EXPORT_SYMBOL(kstorage_generation);
+
+#define KSTORAGE_HASH_BITS 8
+#define KSTORAGE_NBUCKETS (1 << KSTORAGE_HASH_BITS)
+
 // static atomic64_t used_max_group = ATOMIC_INIT(0);
 static int used_max_group = -1;
-static struct list_head kstorage_groups[KSTRORAGE_MAX_GROUP_NUM];
+static struct hlist_head kstorage_groups[KSTRORAGE_MAX_GROUP_NUM][KSTORAGE_NBUCKETS];
 static spinlock_t kstorage_glocks[KSTRORAGE_MAX_GROUP_NUM];
 static int group_sizes[KSTRORAGE_MAX_GROUP_NUM] = { 0 };
 static spinlock_t used_max_group_lock;
+
+static inline struct hlist_head *kstorage_bucket(int gid, long did)
+{
+    unsigned long h = (unsigned long)did * 0x9e3779b97f4a7c15UL;
+    return &kstorage_groups[gid][h >> (64 - KSTORAGE_HASH_BITS)];
+}
 
 static void reclaim_callback(struct rcu_head *rcu)
 {
@@ -33,13 +71,13 @@ static void reclaim_callback(struct rcu_head *rcu)
 
 int try_alloc_kstroage_group()
 {
-    spin_lock(&used_max_group_lock);
+    unsigned long flags = kp_private_spin_lock(&used_max_group_lock);
     if (used_max_group + 1 >= KSTRORAGE_MAX_GROUP_NUM) {
-        spin_unlock(&used_max_group_lock);
+        kp_private_spin_unlock(&used_max_group_lock, flags);
         return -1;
     }
     used_max_group++;
-    spin_unlock(&used_max_group_lock);
+    kp_private_spin_unlock(&used_max_group_lock, flags);
     return used_max_group;
 }
 
@@ -54,23 +92,15 @@ int write_kstorage(int gid, long did, void *data, int offset, int len, bool data
     int rc = -ENOENT;
     if (gid < 0 || gid >= KSTRORAGE_MAX_GROUP_NUM) return rc;
 
-    struct list_head *head = &kstorage_groups[gid];
+    struct hlist_head *bucket = kstorage_bucket(gid, did);
     spinlock_t *lock = &kstorage_glocks[gid];
     struct kstorage *pos = 0, *old = 0;
 
-    rcu_read_lock();
-
-    list_for_each_entry(pos, head, list)
-    {
-        if (pos->did == did) {
-            old = pos;
-            break;
-        }
-    }
-
-    struct kstorage *new = (struct kstorage *)vmalloc(sizeof(struct kstorage) + len);   
+    // Do the potentially-sleeping allocation/copy before entering the RCU
+    // read-side critical section below, since vmalloc()/memdup_user() may
+    // sleep and must never be called with rcu_read_lock() held.
+    struct kstorage *new = (struct kstorage *)vmalloc(sizeof(struct kstorage) + len);
     if (!new) {
-        rcu_read_unlock();
         return -ENOMEM;
     }
     new->gid = gid;
@@ -79,7 +109,7 @@ int write_kstorage(int gid, long did, void *data, int offset, int len, bool data
     if (data_is_user) {
         void *drc = memdup_user(data + offset, len);
         if (IS_ERR(drc)) {
-            rcu_read_unlock();
+            kvfree(new);
             return PTR_ERR(drc);
         }
         memcpy(new->data, drc, len);
@@ -89,14 +119,24 @@ int write_kstorage(int gid, long did, void *data, int offset, int len, bool data
     }
     new->dlen = len;
 
-    spin_lock(lock);
+    rcu_read_lock();
+
+    hlist_for_each_entry_rcu(pos, bucket, hnode)
+    {
+        if (pos->did == did) {
+            old = pos;
+            break;
+        }
+    }
+
+    unsigned long flags = kp_private_spin_lock(lock);
     if (old) { // update
-        list_replace_rcu(&old->list, &new->list);
+        hlist_replace_rcu(&old->hnode, &new->hnode);
     } else { // add new one
-        list_add_rcu(&new->list, head);
+        hlist_add_head_rcu(&new->hnode, bucket);
         group_sizes[gid]++;
     }
-    spin_unlock(lock);
+    kp_private_spin_unlock(lock, flags);
 
     rcu_read_unlock();
 
@@ -109,6 +149,7 @@ int write_kstorage(int gid, long did, void *data, int offset, int len, bool data
             kvfree(old);
         }
     }
+    kstorage_gen_bump();
     return 0;
 }
 KP_EXPORT_SYMBOL(write_kstorage);
@@ -117,10 +158,10 @@ const struct kstorage *get_kstorage(int gid, long did)
 {
     if (gid < 0 || gid >= KSTRORAGE_MAX_GROUP_NUM) return ERR_PTR(-ENOENT);
 
-    struct list_head *head = &kstorage_groups[gid];
+    struct hlist_head *bucket = kstorage_bucket(gid, did);
     struct kstorage *pos = 0;
 
-    list_for_each_entry(pos, head, list)
+    hlist_for_each_entry_rcu(pos, bucket, hnode)
     {
         if (pos->did == did) {
             return pos;
@@ -137,17 +178,19 @@ int on_each_kstorage_elem(int gid, on_kstorage_cb cb, void *udata)
 
     int rc = 0;
 
-    struct list_head *head = &kstorage_groups[gid];
     struct kstorage *pos = 0;
 
     rcu_read_lock();
 
-    list_for_each_entry(pos, head, list)
-    {
-        int rc = cb(pos, udata);
-        if (rc) break;
+    for (int b = 0; b < KSTORAGE_NBUCKETS; b++) {
+        hlist_for_each_entry_rcu(pos, &kstorage_groups[gid][b], hnode)
+        {
+            rc = cb(pos, udata);
+            if (rc) goto out;
+        }
     }
 
+out:
     rcu_read_unlock();
 
     return rc;
@@ -188,31 +231,35 @@ int list_kstorage_ids(int gid, long *ids, int idslen, bool data_is_user)
     if (gid < 0 || gid >= KSTRORAGE_MAX_GROUP_NUM) return -ENOENT;
 
     int cnt = 0;
+    int rc = 0;
 
-    struct list_head *head = &kstorage_groups[gid];
     struct kstorage *pos = 0;
 
     rcu_read_lock();
 
-    list_for_each_entry(pos, head, list)
-    {
-        if (cnt >= idslen) break;
+    for (int b = 0; b < KSTORAGE_NBUCKETS; b++) {
+        hlist_for_each_entry_rcu(pos, &kstorage_groups[gid][b], hnode)
+        {
+            if (cnt >= idslen) goto out;
 
-        if (data_is_user) {
-            int cplen = compat_copy_to_user(ids + cnt, &pos->did, sizeof(pos->did));
-            if (cplen <= 0) {
-                logkfe("compat_copy_to_user error: %d", cplen);
-                cnt = cplen;
+            if (data_is_user) {
+                int cplen = compat_copy_to_user(ids + cnt, &pos->did, sizeof(pos->did));
+                if (cplen <= 0) {
+                    logkfe("compat_copy_to_user error: %d", cplen);
+                    rc = cplen;
+                    goto out;
+                }
+            } else {
+                memcpy(ids + cnt, &pos->did, sizeof(pos->did));
             }
-        } else {
-            memcpy(ids + cnt, &pos->did, sizeof(pos->did));
+            cnt++;
         }
-        cnt++;
     }
 
+out:
     rcu_read_unlock();
 
-    return cnt;
+    return rc ? rc : cnt;
 }
 KP_EXPORT_SYMBOL(list_kstorage_ids);
 
@@ -221,17 +268,17 @@ int remove_kstorage(int gid, long did)
     int rc = -ENOENT;
     if (gid < 0 || gid >= KSTRORAGE_MAX_GROUP_NUM) return rc;
 
-    struct list_head *head = &kstorage_groups[gid];
+    struct hlist_head *bucket = kstorage_bucket(gid, did);
     spinlock_t *lock = &kstorage_glocks[gid];
     struct kstorage *pos = 0;
 
-    spin_lock(lock);
+    unsigned long flags = kp_private_spin_lock(lock);
 
-    list_for_each_entry(pos, head, list)
+    hlist_for_each_entry_rcu(pos, bucket, hnode)
     {
         if (pos->did == did) {
-            list_del_rcu(&pos->list);
-            spin_unlock(lock);
+            hlist_del_rcu(&pos->hnode);
+            kp_private_spin_unlock(lock, flags);
 
             group_sizes[gid]--;
 
@@ -242,11 +289,12 @@ int remove_kstorage(int gid, long did)
                 synchronize_rcu();
                 kvfree(pos);
             }
+            kstorage_gen_bump();
             return 0;
         }
     }
 
-    spin_unlock(lock);
+    kp_private_spin_unlock(lock, flags);
 
     return 0;
 }
@@ -255,7 +303,9 @@ KP_EXPORT_SYMBOL(remove_kstorage);
 int kstorage_init()
 {
     for (int i = 0; i < KSTRORAGE_MAX_GROUP_NUM; i++) {
-        INIT_LIST_HEAD(&kstorage_groups[i]);
+        for (int b = 0; b < KSTORAGE_NBUCKETS; b++) {
+            INIT_HLIST_HEAD(&kstorage_groups[i][b]);
+        }
         spin_lock_init(&kstorage_glocks[i]);
     }
     spin_lock_init(&used_max_group_lock);

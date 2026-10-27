@@ -91,6 +91,22 @@ start_prepare:
     str x13, [x11, #start_map_offset_offset]
     mov x20, x13
 
+    // start_preset.sprintf_offset = setup_preset.sprintf_offset
+    ldr x13, [x10, #setup_sprintf_offset_offset]
+    str x13, [x11, #start_sprintf_offset_offset]
+
+    // start_preset.symbol_lookup_anchor_offset = setup_preset.symbol_lookup_anchor_offset
+    ldr x13, [x10, #setup_symbol_lookup_anchor_offset_offset]
+    str x13, [x11, #start_symbol_lookup_anchor_offset_offset]
+
+    // start_preset.kconfig_offset = setup_preset.kconfig_offset
+    ldr x13, [x10, #setup_kconfig_offset_offset]
+    str x13, [x11, #start_kconfig_offset_offset]
+
+    // start_preset.kconfig_size = setup_preset.kconfig_size
+    ldr x13, [x10, #setup_kconfig_size_offset]
+    str x13, [x11, #start_kconfig_size_offset]
+
     // memcpy(&start_preset.setup, &setup_header, KP_HEADER_SIZE);
     add x0, x11, #start_header_offset
     add x1, x12, #0
@@ -98,20 +114,29 @@ start_prepare:
     bl memcpy8
 
     // memcpy(&start_preset.patch_config, &setup_preset.patch_config, sizeof(header.patch_config));
-    add x0, x11, #start_patch_config_offset;
+    mov x3, #start_patch_config_offset
+    add x0, x11, x3
     add x1, x10, #setup_patch_config_offset
     mov x2, #PATCH_CONFIG_LEN
     bl memcpy8
 
     // backup map area
-    // memcpy(start_preset.map_backup, kernel_pa + setup_preset.map_offset, (uint64_t)_map_end - (uint64_t)_map_start)
+    // memcpy(start_preset.map_backup, kernel_pa + setup_preset.map_offset, backup_len)
+    // backup_len = max(map section size, setup_preset.map_max_size): the
+    // backup must cover every byte kptools NOP-synced (map_max_size) as well
+    // as the map section copy itself, so restore_map can rebuild the exact
+    // original anchor region.
     adrp x13, _map_end
     add x13, x13, :lo12:_map_end
     adrp x14, _map_start
     add x14, x14, :lo12:_map_start
     sub x2, x13, x14
-
-    // start_preset.map_backup_len = (uint64_t)_map_end - (uint64_t)_map_start
+    ldr x3, [x10, #setup_map_max_size_offset]
+    cmp x2, x3
+    b.hs 91f
+    mov x2, x3
+91:
+    // start_preset.map_backup_len = backup_len
     str x2, [x11, #start_map_backup_len_offset]
     add x0, x11, #start_map_backup_offset
     add x1, x19, x20
@@ -161,6 +186,10 @@ map_prepare:
 
     // map_data.kernel_pa = kernel_pa;
     str x19, [x9, #map_kernel_pa_offset]
+
+    // map_data.kernel_version = setup_preset.kernel_version
+    ldr w11, [x10, #setup_kernel_version_offset]
+    str w11, [x9, #map_kernel_version_offset]
 
     // map_data.map_offset = setup_preset.map_offset;
     ldr x11, [x10, #setup_map_offset_offset]
