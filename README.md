@@ -1,59 +1,17 @@
-# KPatch-Next
+# KPatch-Next-Pro
 
-Independently maintained unofficial derivative by [yyyy1314](https://github.com/yyyy1314), based on [KernelSU-Next/KPatch-Next](https://github.com/KernelSU-Next/KPatch-Next) and [KernelPatch 0.13.9](https://github.com/bmax121/KernelPatch/tree/0.13.9). This project is not an official release of either upstream project. Original authorship and licenses are retained.
+[KPatch-Next](https://github.com/KernelSU-Next/KPatch-Next) 的独立分支，基于 KernelPatch 0.13.9，为 Magisk/KernelSU 提供 KPM 支持。
 
-The companion module starts at version 0.0.1; the engine retains its separate 0.13.9-1 version. Builds have passed compilation; device boot and KPM compatibility have not been validated.
+ARM64 架构。`main` 分支通过 Actions 编译 `kpimg`、`kptools` 和 `kpatch`。
 
-**Patching and hooking the Linux kernel with only stripped Linux kernel image.**
+## 鸣谢
 
-``` shell
- _  ______       _       _           _   _           _   
-| |/ /  _ \ __ _| |_ ___| |__       | \ | | _____  _| |_ 
-| ' /| |_) / _` | __/ __| '_ \ _____|  \| |/ _ \ \/ / __|
-| . \|  __/ (_| | || (__| | | |_____| |\  |  __/>  <| |_ 
-|_|\_\_|   \__,_|\__\___|_| |_|     |_| \_|\___/_/\_\\__|
+- [KernelPatch](https://github.com/bmax121/KernelPatch)：bmax121
+- [KPatch-Next](https://github.com/KernelSU-Next/KPatch-Next)：rifsxd 及原项目贡献者
+- [vmlinux-to-elf](https://github.com/marin-m/vmlinux-to-elf)
+- [android-inline-hook](https://github.com/bytedance/android-inline-hook)
+- [tlsf](https://github.com/mattconte/tlsf)
 
-```
+## 许可证
 
-- Obtain all symbol information without source code and symbol information.
-- Inject arbitrary code into the kernel. (Static patching the kernel image or Runtime dynamic loading).
-- Kernel function inline hook and syscall table hook are provided.
-- Pure KPM module support for all root managers i.e Magisk & KernelSU/N (Except APatch).
-- Checkout our magisk/kernelsu module! [KPatch-Next-Module](https://github.com/yyyy1314/KPatch-Next-Module)
-
-## Requirement
-
-CONFIG_KALLSYMS=y
-CONFIG_KALLSYMS_ALL=y
-
-or
-
-CONFIG_KALLSYMS=y
-CONFIG_KALLSYMS_ALL=n (Initial support)
-
-or
-
-CONFIG_KALLSYMS=y
-
-## Supported Versions
-
-Currently only supports arm64 architecture.  
-
-Linux 3.18 - 6.12 (theoretically)  
-
-## Get Involved
-
-## More Information
-
-[Documentation](./doc/)
-
-## Credits
-
-- [KernelPatch](https://github.com/bmax121/KernelPatch): Special thanks to the author for making this project possible.
-- [vmlinux-to-elf](https://github.com/marin-m/vmlinux-to-elf): Some ideas for parsing kernel symbols.
-- [android-inline-hook](https://github.com/bytedance/android-inline-hook): Some code for fixing arm64 inline hook instructions.
-- [tlsf](https://github.com/mattconte/tlsf): Memory allocator used for KPM. (Need another to allocate ROX memory.)
-
-## License
-
-KPatch-Next is licensed under the **GNU General Public License (GPL) 2.0** (<https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>).
+[GPL-2.0](LICENSE)。保留原始版权声明。

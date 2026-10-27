@@ -41,6 +41,6 @@ jobs:
           cp user/build/android/kpatch out/kpatch-android
       - uses: actions/upload-artifact@v4
         with:
-          name: KPatch-Next-0.13.9-1-${{ github.sha }}
+          name: KPatch-Next-Pro-0.13.9-1-${{ github.sha }}
           path: out/
           if-no-files-found: error
