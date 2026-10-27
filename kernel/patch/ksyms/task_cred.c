@@ -203,7 +203,7 @@ int resolve_cred_offset()
     kernel_cap_t new_cap_e = { 0xff }, new_cap_i = { 0xf }, new_cap_p = { 0xfff };
     cap_capset(cred1, cred, &new_cap_e, &new_cap_i, &new_cap_p);
 
-    for (int i = 0; i < CRED_MAX_SIZE; i += sizeof(uint32_t)) {
+    for (int i = 0; i + (int)sizeof(kernel_cap_t) <= CRED_MAX_SIZE; i += sizeof(uint32_t)) {
         if (is_bl(i)) continue;
         kernel_cap_t cap = *(kernel_cap_t *)((uintptr_t)cred + i);
         kernel_cap_t cap1 = *(kernel_cap_t *)((uintptr_t)cred1 + i);
@@ -225,7 +225,7 @@ int resolve_cred_offset()
     }
 
     // cap_bset
-    for (int i = 0; i < CRED_MAX_SIZE; i += sizeof(uint32_t)) {
+    for (int i = 0; i + (int)sizeof(kernel_cap_t) <= CRED_MAX_SIZE; i += sizeof(uint32_t)) {
         if (is_bl(i)) continue;
         kernel_cap_t cap1 = *(kernel_cap_t *)((uintptr_t)cred1 + i);
         if (cap1.val == effective.val) {
@@ -353,7 +353,11 @@ int resolve_cred_offset()
     *(unsigned *)((uintptr_t)new_cred + cred_offset.securebits_offset) = 0;
     cap_task_prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, 0xf, 0, 0);
     new_cred = *(struct cred **)((uintptr_t)task + task_struct_offset.cred_offset);
-    for (int i = 0; i < CRED_MAX_SIZE; i += sizeof(uint32_t)) {
+    /* prctl installed a slab cred, not one of our CRED_MAX_SIZE scratch buffers. */
+    unsigned long (*cred_size)(const void *) = (typeof(cred_size))kallsyms_lookup_name("ksize");
+    unsigned long ambient_scan_len = cred_size ? cred_size(new_cred) : CRED_MAX_SIZE;
+    for (int i = 0; i + (int)sizeof(kernel_cap_t) <= CRED_MAX_SIZE &&
+                    i + (int)sizeof(kernel_cap_t) <= ambient_scan_len; i += sizeof(uint32_t)) {
         if (is_bl(i)) continue;
         kernel_cap_t cap = *(kernel_cap_t *)((uintptr_t)cred + i);
         kernel_cap_t new_cap = *(kernel_cap_t *)((uintptr_t)new_cred + i);
@@ -401,7 +405,8 @@ int resolve_task_offset()
     int cred_offset_idx = 0;
     init_cred = get_task_cred(init_task); // todo: get_task_cred not export
     log_boot("    init_cred addr: %llx\n", init_cred);
-    for (uintptr_t i = (uintptr_t)init_task; i < (uintptr_t)init_task + TASK_STRUCT_MAX_SIZE; i += sizeof(uint32_t)) {
+    for (uintptr_t i = (uintptr_t)init_task; i + sizeof(uintptr_t) <= (uintptr_t)init_task + TASK_STRUCT_MAX_SIZE;
+         i += sizeof(uint32_t)) {
         uintptr_t val = *(uintptr_t *)i;
         if (val == (uintptr_t)init_cred) {
             cred_offset[cred_offset_idx++] = i - (uintptr_t)init_task;
@@ -443,7 +448,8 @@ int resolve_task_offset()
     // active_mm
     init_mm = (struct mm_struct *)kallsyms_lookup_name("init_mm");
     if (init_mm) {
-        for (uintptr_t i = (uintptr_t)task; i < (uintptr_t)task + TASK_STRUCT_MAX_SIZE; i += sizeof(uint32_t)) {
+        for (uintptr_t i = (uintptr_t)task; i + sizeof(uintptr_t) <= (uintptr_t)task + TASK_STRUCT_MAX_SIZE;
+             i += sizeof(uint32_t)) {
             uintptr_t active_mm = *(uintptr_t *)i;
             if (active_mm == (uintptr_t)init_mm) {
                 task_struct_offset.active_mm_offset = i - (uintptr_t)task;
@@ -534,6 +540,40 @@ int resolve_current()
             log_boot("    init stack end: %llx\n", psp);
             break;
         }
+    }
+
+    /* Newer GKI kernels may compile set_task_stack_end_magic() to an empty
+     * function when the scheduler stack-end check is disabled.  In that case
+     * the init stack contains no STACK_END_MAGIC even though its layout is
+     * otherwise unchanged.  The init_thread_union symbol is the exact base of
+     * the boot task's stack, so use it to select the smallest candidate that
+     * contains the current SP.  For a downward-growing arm64 stack this is the
+     * real THREAD_SIZE: a smaller candidate aligns SP above the stack base.
+     *
+     * Only take this path when sp_el0 identified current as task_struct.  If
+     * sp_el0 is thread_info, an absent magic also means we cannot safely infer
+     * the end_of_stack offset used by old !THREAD_INFO_IN_TASK kernels. */
+    if (!thread_size && init_thread_union_addr && sp_el0_is_current) {
+        for (int i = 0; i < sizeof(thread_shift_cand) / sizeof(thread_shift_cand[0]); i++) {
+            int tsz = 1 << thread_shift_cand[i];
+            uint64_t sp_low = sp & ~(tsz - 1);
+            if (sp_low != init_thread_union_addr) continue;
+
+            thread_size = tsz;
+            stack_end_offset = 0;
+            thread_info_in_task = 1;
+            log_boot("    stack size inferred from init_thread_union: %x\n", thread_size);
+            break;
+        }
+    }
+
+    /* Keep the historical arm64 default as a last-resort compatibility path
+     * for kernels that hide init_thread_union from kallsyms. */
+    if (!thread_size) {
+        thread_size = 0x4000;
+        stack_end_offset = 0;
+        thread_info_in_task = 1;
+        log_boot("    stack size fallback to arm64 default: %x\n", thread_size);
     }
 
     log_boot("    thread_size: %x\n", thread_size);
