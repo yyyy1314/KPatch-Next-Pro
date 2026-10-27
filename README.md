@@ -1,5 +1,9 @@
 # KPatch-Next
 
+Independently maintained unofficial derivative by [yyyy1314](https://github.com/yyyy1314), based on [KernelSU-Next/KPatch-Next](https://github.com/KernelSU-Next/KPatch-Next) and [KernelPatch 0.13.9](https://github.com/bmax121/KernelPatch/tree/0.13.9). This project is not an official release of either upstream project. Original authorship and licenses are retained.
+
+The companion module starts at version 0.0.1; the engine retains its separate 0.13.9-1 version. Builds have passed compilation; device boot and KPM compatibility have not been validated.
+
 **Patching and hooking the Linux kernel with only stripped Linux kernel image.**
 
 ``` shell
@@ -15,7 +19,7 @@
 - Inject arbitrary code into the kernel. (Static patching the kernel image or Runtime dynamic loading).
 - Kernel function inline hook and syscall table hook are provided.
 - Pure KPM module support for all root managers i.e Magisk & KernelSU/N (Except APatch).
-- Checkout our magisk/kernelsu module! [KPatch-Next-Module](https://github.com/KernelSU-Next/KPatch-Next-Module)
+- Checkout our magisk/kernelsu module! [KPatch-Next-Module](https://github.com/yyyy1314/KPatch-Next-Module)
 
 ## Requirement
 
