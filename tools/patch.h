@@ -62,13 +62,15 @@ void new_kernel_file(kernel_file_t *kernel_file, kernel_file_t *old, int32_t kim
 void update_kernel_file_img_len(kernel_file_t *kernel_file, int32_t kimg_len, bool is_different_endian);
 void write_kernel_file(kernel_file_t *kernel_file, const char *path);
 void free_kernel_file(kernel_file_t *kernel_file);
-
+int hex_patch(char *img, size_t imglen,const char *pattern_hex, const char *replace_hex);
 preset_t *get_preset(const char *kimg, int kimg_len);
 
 uint32_t get_kpimg_version(const char *kpimg_path);
 int extra_str_type(const char *extra_str);
 const char *extra_type_str(extra_item_type extra_type);
 int patch_update_img(const char *kimg_path, const char *kpimg_path, const char *out_path, const char **additional, extra_config_t *extra_configs, int extra_config_num);
+int patch_update_img_buf(const char *kimg, int kimg_len, const char *kpimg_path, const char **additional, extra_config_t *extra_configs,
+                         int extra_config_num, char **out_kimg, int *out_kimg_len);
 int unpatch_img(const char *kimg_path, const char *out_path);
 int dump_kallsym(const char *kimg_path);
 int dump_ikconfig(const char *kimg_path);

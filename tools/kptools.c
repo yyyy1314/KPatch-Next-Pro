@@ -16,7 +16,7 @@
 #include <errno.h>
 
 #include "../version"
-
+#include "bootimg.h"
 #include "preset.h"
 #include "image.h"
 #include "order.h"
@@ -40,13 +40,15 @@ void print_usage(char **argv)
         "  -v, --version                    Print version number. Print kpimg version if -k specified.\n"
 
         "  -p, --patch                      Patch or Update patch of kernel image(-i) with specified kpimg(-k).\n"
+        "                                   If -i is an Android boot image (ANDROID! magic), the kernel is extracted,\n"
+        "                                   patched and the boot image is repacked automatically in one step.\n"
         "  -u, --unpatch                    Unpatch patched kernel image(-i).\n"
         "  -d, --dump                       Dump kallsyms infomations of kernel image(-i).\n"
         "  -f, --flag                       Dump ikconfig infomations of kernel image(-i).\n"
         "  -l, --list                       Print all patch informations of kernel image if (-i) specified.\n"
         "                                   Print extra item informations if (-M) specified.\n"
         "                                   Print KPatch-Next image informations if (-k) specified.\n"
-
+        "Unpack kernel: unpack <boot.img>\n  Repack Kernel: repack <boot.img>\n"
         "Options:\n"
         "  -i, --image PATH                 Kernel image path.\n"
         "  -k, --kpimg PATH                 KPatch-Next image path.\n"
@@ -62,8 +64,8 @@ void print_usage(char **argv)
         "  -N, --extra-name NAME            Set name of previous extra item.\n"
         "  -V, --extra-event EVENT          Set trigger event of previous extra item.\n"
         "  -A, --extra-args ARGS            Set arguments of previous extra item.\n"
-        "  -D, --extra-detach               Detach previous extra item from patches.\n"
-        "\n";
+"  -D, --extra-detach               Detach previous extra item from patches.\n"
+"\n";
     fprintf(stdout, c, version, program_name);
 }
 
@@ -71,12 +73,29 @@ int main(int argc, char *argv[])
 {
     version = (MAJOR << 16) + (MINOR << 8) + PATCH;
     program_name = argv[0];
-
+    if (argc > 2){
+        
+        if (strcmp(argv[1], "unpack") == 0) {
+            set_log_enable(true);
+            return extract_kernel(argv[2]);
+        }
+        if (strcmp(argv[1], "unpacknolog") == 0) {
+            return extract_kernel(argv[2]);
+        } 
+        if (strcmp(argv[1], "repack") == 0) {
+            set_log_enable(true);
+            return repack_bootimg(argv[2], "kernel", "new-boot.img");
+        } 
+        if (strcmp(argv[1], "sha1") == 0) {
+            return cacluate_sha1(argv[2]);
+        }
+    }
     struct option longopts[] = { { "help", no_argument, NULL, 'h' },
                                  { "version", no_argument, NULL, 'v' },
 
                                  { "patch", no_argument, NULL, 'p' },
                                  { "unpatch", no_argument, NULL, 'u' },
+                                 { "resetkey", no_argument, NULL, 'r' },
                                  { "dump", no_argument, NULL, 'd' },
                                  { "flag", no_argument, NULL, 'f' },
                                  { "list", no_argument, NULL, 'l' },
@@ -93,7 +112,7 @@ int main(int argc, char *argv[])
                                  { "extra-event", required_argument, NULL, 'V' },
                                  { "extra-args", required_argument, NULL, 'A' },
                                  { 0, 0, 0, 0 } };
-    char *optstr = "hvpurdfli:k:o:a:M:E:T:N:V:A:";
+    char *optstr = "hvpudfli:k:o:a:M:E:T:N:V:A:";
 
     char *kimg_path = NULL;
     char *kpimg_path = NULL;
@@ -117,7 +136,6 @@ int main(int argc, char *argv[])
         case 'v':
         case 'p':
         case 'u':
-        case 'r':
         case 'd':
         case 'f':
         case 'l':
@@ -174,14 +192,22 @@ int main(int argc, char *argv[])
         else
             fprintf(stdout, "%x\n", version);
     } else if (cmd == 'p') {
-        ret = patch_update_img(kimg_path, kpimg_path, out_path, additional, extra_configs,
-                               extra_config_num);
+        set_log_enable(true);
+        if (kimg_path && is_bootimg(kimg_path)) {
+            tools_logi("detected Android boot image, patching kernel in place\n");
+            ret = patch_bootimg(kimg_path, kpimg_path, out_path, additional, extra_configs,
+                                extra_config_num);
+        } else {
+            ret = patch_update_img(kimg_path, kpimg_path, out_path, additional, extra_configs,
+                                   extra_config_num);
+        }
     } else if (cmd == 'd') {
         ret = dump_kallsym(kimg_path);
     } else if (cmd == 'f') {
         ret = dump_ikconfig(kimg_path);
     } else if (cmd == 'u') {
         ret = unpatch_img(kimg_path, out_path);
+
     } else if (cmd == 'l') {
         if (kimg_path) return print_image_patch_info_path(kimg_path);
         if (config && config->path) return print_kpm_info_path(config->path);

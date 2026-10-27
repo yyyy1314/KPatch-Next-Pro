@@ -10,6 +10,7 @@
 #include <syscall.h>
 #include <module.h>
 #include <predata.h>
+#include <symbol.h>
 #include <linux/string.h>
 
 void print_bootlog()
@@ -40,26 +41,42 @@ void before_panic(hook_fargs12_t *args, void *udata)
 
 void linux_misc_symbol_init();
 void linux_libs_symbol_init();
+void hotpatch_symbol_init();
 
 int resolve_struct();
 int task_observer();
+int hotpatch_init();
 int bypass_kcfi();
 int bypass_selinux();
 int resolve_pt_regs();
 int supercall_install();
 void module_init();
+/* Capture SELinux policy loads from the boot path: the platform policy is
+ * loaded by init long before post-fs-data, so the hook must be in place now. */
+int selinux_sepolicy_boot_init();
 void syscall_init();
+void syscall_dispatch_init();
 int kstorage_init();
 int kpextension_init();
 int rehook_init();
+// int selinux_hide_init();
+
+
 
 static void before_rest_init(hook_fargs4_t *args, void *udata)
 {
     int rc = 0;
     log_boot("entering init ...\n");
 
+    if ((rc = hotpatch_init())) goto out;
+    log_boot("hotpatch_init done: %d\n", rc);
+
     if ((rc = bypass_kcfi())) goto out;
     log_boot("bypass_kcfi done: %d\n", rc);
+
+    /* Must precede supercall_install/su_compat_init so their hook_syscalln
+     * calls register with the dispatcher instead of patching the table. */
+    syscall_dispatch_init();
 
     if ((rc = resolve_struct())) goto out;
     log_boot("resolve_struct done: %d\n", rc);
@@ -79,42 +96,64 @@ static void before_rest_init(hook_fargs4_t *args, void *udata)
     rc = kpextension_init();
     log_boot("kpextension_init done: %d\n", rc);
 
+    log_boot("selinux_sepolicy_boot_init: %d\n", selinux_sepolicy_boot_init());
+
     rc = resolve_pt_regs();
     log_boot("resolve_pt_regs done: %d\n", rc);
 
     rc = rehook_init();
     log_boot("rehook_init done: %d\n", rc);
 
+
 out:
     return;
 }
 
-static int extra_event_pre_kernel_init(const patch_extra_item_t *extra, const char *args, const void *data, void *udata)
+static int extra_event_load_kpm(const patch_extra_item_t *extra, const char *args, const void *data, void *udata)
 {
+    const char *event = (const char *)udata;
+
+    if (!event) return 0;
+
     if (extra->type == EXTRA_TYPE_KPM) {
-        if (!strcmp(EXTRA_EVENT_PRE_KERNEL_INIT, extra->event) || !extra->event[0]) {
-            int rc = load_module(data, extra->con_size, args, EXTRA_EVENT_PRE_KERNEL_INIT, 0);
-            log_boot("load kpm: %s, rc: %d\n", extra->name, rc);
+        if (!strcmp(event, extra->event) || (!extra->event[0] && !strcmp(event, EXTRA_EVENT_KPM_DEFAULT))) {
+            int rc = load_module(data, extra->con_size, args, event, 0);
+            log_boot("load kpm: %s, event: %s, rc: %d\n", extra->name, event, rc);
         }
     }
     return 0;
 }
 
+void extra_event_init_args(const char *event, const char *args)
+{
+    if (!event) return;
+    log_boot("event: %s\n", event);
+    notify_modules_event(event, args, 0);
+    on_each_extra_item(extra_event_load_kpm, (void *)event);
+}
+KP_EXPORT_SYMBOL(extra_event_init_args);
+
+void extra_event_init(const char *event)
+{
+    extra_event_init_args(event, 0);
+}
+KP_EXPORT_SYMBOL(extra_event_init);
+
 static void before_kernel_init(hook_fargs4_t *args, void *udata)
 {
-    log_boot("event: %s\n", EXTRA_EVENT_PRE_KERNEL_INIT);
-    on_each_extra_item(extra_event_pre_kernel_init, 0);
+    extra_event_init(EXTRA_EVENT_PRE_KERNEL_INIT);
 }
 
 static void after_kernel_init(hook_fargs4_t *args, void *udata)
 {
-    log_boot("event: %s\n", EXTRA_EVENT_POST_KERNEL_INIT);
+    extra_event_init(EXTRA_EVENT_POST_KERNEL_INIT);
 }
 
 int patch()
 {
     linux_libs_symbol_init();
     linux_misc_symbol_init();
+    hotpatch_symbol_init();
     module_init();
     syscall_init();
 
@@ -127,6 +166,8 @@ int patch()
         log_boot("hook panic rc: %d\n", rc);
     }
     if (rc) return rc;
+
+    extra_event_init(EXTRA_EVENT_PAGING_INIT);
 
     // rest_init or cgroup_init
     unsigned long init_addr = patch_config->rest_init;
