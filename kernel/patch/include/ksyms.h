@@ -9,8 +9,6 @@
 #include <linux/kallsyms.h>
 #include <log.h>
 
-
-
 #define INIT_USE_KALLSYMS_LOOKUP_NAME
 
 #define KFUNC_POISON 0xdeaddead00000000
@@ -23,8 +21,8 @@
 #define kfunc(func) kf_##func
 #define kfunc_def(func) (*kf_##func)
 
-#define kvar_lookup_name(var) kv_##var = (typeof(kv_##var))kallsyms_lookup_name_by_suffix(#var)
-#define kfunc_lookup_name(func) kf_##func = (typeof(kf_##func))kallsyms_lookup_name_by_suffix(#func)
+#define kvar_lookup_name(var) kv_##var = (typeof(kv_##var))kallsyms_lookup_name(#var)
+#define kfunc_lookup_name(func) kf_##func = (typeof(kf_##func))kallsyms_lookup_name(#func)
 
 #ifdef INIT_USE_KALLSYMS_LOOKUP_NAME
 #define kvar_match(var, name, addr) kvar_lookup_name(var)
@@ -53,8 +51,7 @@ int _ksym_local_strcmp(const char *s1, const char *s2);
 // todo
 #define kfunc_not_found() logke("kfunc: %s not found\n", __func__);
 
-unsigned long kallsyms_lookup_name_by_suffix(const char *name);
-
 #endif
 
 
+unsigned long kallsyms_lookup_name_by_suffix(const char *name);

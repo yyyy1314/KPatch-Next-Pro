@@ -3,7 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/rculist.h>
 #include <linux/slab.h>
-#include <kp_spinlock.h>
+#include <linux/spinlock.h>
 #include <linux/list.h>
 #include <compiler.h>
 #include <stdbool.h>
@@ -17,35 +17,6 @@
 #include <kputils.h>
 
 #define KSTRORAGE_MAX_GROUP_NUM 4
-
-/* Bumped on every successful write/remove so readers can memoise lookups and
- * still observe list changes (see is_su_allow_uid). */
-static volatile u32 kstorage_gen = 1;
-
-static inline void kstorage_gen_bump(void)
-{
-#if defined(__aarch64__)
-    /* GCC's outline atomics would call __aarch64_ldadd4_relax, which the
-     * freestanding kpimg link (-nostdlib, no libgcc) cannot resolve. Use the
-     * LL/SC pair, which every arm64 CPU implements. */
-    uint32_t old, tmp;
-    asm volatile("1: ldxr  %w0, [%2]\n"
-                 "   add   %w0, %w0, #1\n"
-                 "   stxr  %w1, %w0, [%2]\n"
-                 "   cbnz  %w1, 1b\n"
-                 : "=&r"(old), "=&r"(tmp)
-                 : "r"(&kstorage_gen)
-                 : "memory");
-#else
-    __atomic_add_fetch(&kstorage_gen, 1, __ATOMIC_RELAXED);
-#endif
-}
-
-u32 kstorage_generation(void)
-{
-    return __atomic_load_n(&kstorage_gen, __ATOMIC_RELAXED);
-}
-KP_EXPORT_SYMBOL(kstorage_generation);
 
 #define KSTORAGE_HASH_BITS 8
 #define KSTORAGE_NBUCKETS (1 << KSTORAGE_HASH_BITS)
@@ -71,13 +42,13 @@ static void reclaim_callback(struct rcu_head *rcu)
 
 int try_alloc_kstroage_group()
 {
-    unsigned long flags = kp_private_spin_lock(&used_max_group_lock);
+    spin_lock(&used_max_group_lock);
     if (used_max_group + 1 >= KSTRORAGE_MAX_GROUP_NUM) {
-        kp_private_spin_unlock(&used_max_group_lock, flags);
+        spin_unlock(&used_max_group_lock);
         return -1;
     }
     used_max_group++;
-    kp_private_spin_unlock(&used_max_group_lock, flags);
+    spin_unlock(&used_max_group_lock);
     return used_max_group;
 }
 
@@ -129,14 +100,14 @@ int write_kstorage(int gid, long did, void *data, int offset, int len, bool data
         }
     }
 
-    unsigned long flags = kp_private_spin_lock(lock);
+    spin_lock(lock);
     if (old) { // update
         hlist_replace_rcu(&old->hnode, &new->hnode);
     } else { // add new one
         hlist_add_head_rcu(&new->hnode, bucket);
         group_sizes[gid]++;
     }
-    kp_private_spin_unlock(lock, flags);
+    spin_unlock(lock);
 
     rcu_read_unlock();
 
@@ -149,7 +120,6 @@ int write_kstorage(int gid, long did, void *data, int offset, int len, bool data
             kvfree(old);
         }
     }
-    kstorage_gen_bump();
     return 0;
 }
 KP_EXPORT_SYMBOL(write_kstorage);
@@ -272,13 +242,13 @@ int remove_kstorage(int gid, long did)
     spinlock_t *lock = &kstorage_glocks[gid];
     struct kstorage *pos = 0;
 
-    unsigned long flags = kp_private_spin_lock(lock);
+    spin_lock(lock);
 
     hlist_for_each_entry_rcu(pos, bucket, hnode)
     {
         if (pos->did == did) {
             hlist_del_rcu(&pos->hnode);
-            kp_private_spin_unlock(lock, flags);
+            spin_unlock(lock);
 
             group_sizes[gid]--;
 
@@ -289,12 +259,11 @@ int remove_kstorage(int gid, long did)
                 synchronize_rcu();
                 kvfree(pos);
             }
-            kstorage_gen_bump();
             return 0;
         }
     }
 
-    kp_private_spin_unlock(lock, flags);
+    spin_unlock(lock);
 
     return 0;
 }
