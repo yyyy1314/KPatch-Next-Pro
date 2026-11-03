@@ -9,3 +9,5 @@ test
 script
 
 *.zip
+
+.engine-build/

@@ -1,6 +1,6 @@
 # KPatch-Next-Pro
 
-[KPatch-Next](https://github.com/KernelSU-Next/KPatch-Next) 的独立分支，基于 KernelPatch 0.13.9，为 Magisk/KernelSU 提供 KPM 支持。
+[KPatch-Next](https://github.com/KernelSU-Next/KPatch-Next) 的独立分支，基于 KernelPatch 0.13.8 / 0.13.9，为 Magisk/KernelSU 提供 KPM 支持。
 
 ARM64 架构。`main` 分支通过 Actions 编译 `kpimg`、`kptools` 和 `kpatch`。
 
@@ -15,3 +15,5 @@ ARM64 架构。`main` 分支通过 Actions 编译 `kpimg`、`kptools` 和 `kpatc
 ## 许可证
 
 [GPL-2.0](LICENSE)。保留原始版权声明。
+
+Engine source revisions are pinned in `engines.json`.
